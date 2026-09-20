@@ -1,2 +1,2 @@
 # JazTasks
-https://williac0374.github.io/JazTasks/index.html
+https://williac0374.github.io/JazTasks/

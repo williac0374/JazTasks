@@ -258,12 +258,26 @@
 
 <body>
     <div class="app-shell">
-        <main class="task-panel">
+        <div id="listHeader"
+            style="display:none; align-items:center; justify-content:space-between; margin-bottom:8px;">
+            <h1 id="listTitle" style="margin:0; font-size:1.25rem;"></h1>
+            <button id="closeListBtn" class="secondary-button" type="button">← Lists</button>
+        </div>
+
+        <div id="listsContainer">
+            <div style="display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:12px;">
+                <h2 style="margin:0; font-size:1.25rem;">Lists</h2>
+            </div>
+            <ul id="listsList" class="task-list" aria-live="polite"></ul>
+        </div>
+
+        <main class="task-panel" id="tasksScreen" style="display:none;">
             <ul id="taskList" class="task-list" aria-live="polite"></ul>
         </main>
 
         <div class="toolbar" aria-label="Task actions">
             <button id="newTaskBtn" class="new-task-btn" type="button">New Task</button>
+            <button id="newListTopBtn" class="new-task-btn" type="button">New List</button>
             <button id="settingsBtn" class="settings-btn" type="button">Settings</button>
         </div>
     </div>
@@ -331,8 +345,9 @@
 
     <script>
         const STORAGE_KEYS = {
-            tasks: 'jaztasks.tasks',
-            settings: 'jaztasks.settings'
+            lists: 'jaztasks.lists',
+            lastSettings: 'jaztasks.lastSettings',
+            masterSettings: 'jaztasks.masterSettings'
         };
 
         const defaultSettings = {
@@ -345,6 +360,7 @@
             backgroundImage: ''
         };
 
+        // UI elements
         const taskList = document.getElementById('taskList');
         const newTaskBtn = document.getElementById('newTaskBtn');
         const settingsBtn = document.getElementById('settingsBtn');
@@ -362,33 +378,59 @@
         const clearTaskListBtn = document.getElementById('clearTaskListBtn');
         const removeBackgroundImageBtn = document.getElementById('removeBackgroundImage');
 
-        let tasks = loadTasks();
-        let settings = loadSettings();
+        const listsContainer = document.getElementById('listsContainer');
+        const listsList = document.getElementById('listsList');
+        const createListBtn = document.getElementById('createListBtn');
+        const tasksScreen = document.getElementById('tasksScreen');
+        const listHeader = document.getElementById('listHeader');
+        const listTitle = document.getElementById('listTitle');
+        const closeListBtn = document.getElementById('closeListBtn');
 
-        function loadTasks() {
+        // app state
+        let lists = loadLists();
+        let currentListId = null;
+        let tasks = [];
+        let settings = loadMasterSettings();
+
+        function loadMasterSettings() {
             try {
-                const stored = JSON.parse(localStorage.getItem(STORAGE_KEYS.tasks));
-                return Array.isArray(stored) ? stored : [];
-            } catch (error) {
-                return [];
-            }
-        }
-
-        function saveTasks() {
-            localStorage.setItem(STORAGE_KEYS.tasks, JSON.stringify(tasks));
-        }
-
-        function loadSettings() {
-            try {
-                const stored = JSON.parse(localStorage.getItem(STORAGE_KEYS.settings));
+                const stored = JSON.parse(localStorage.getItem(STORAGE_KEYS.masterSettings));
                 return { ...defaultSettings, ...(stored || {}) };
-            } catch (error) {
+            } catch (e) {
                 return { ...defaultSettings };
             }
         }
 
-        function saveSettings() {
-            localStorage.setItem(STORAGE_KEYS.settings, JSON.stringify(settings));
+        function saveMasterSettings() {
+            localStorage.setItem(STORAGE_KEYS.masterSettings, JSON.stringify(settings));
+        }
+
+        function loadLists() {
+            try {
+                const stored = JSON.parse(localStorage.getItem(STORAGE_KEYS.lists));
+                return Array.isArray(stored) ? stored : [];
+            } catch (e) {
+                return [];
+            }
+        }
+
+        function saveLists() {
+            localStorage.setItem(STORAGE_KEYS.lists, JSON.stringify(lists));
+        }
+
+        function loadLastSettings() {
+            try {
+                const stored = JSON.parse(localStorage.getItem(STORAGE_KEYS.lastSettings));
+                return { ...defaultSettings, ...(stored || {}) };
+            } catch (e) {
+                return { ...defaultSettings };
+            }
+        }
+
+        function saveLastSettings() {
+            // legacy alias: keep lastSettings in sync with masterSettings
+            localStorage.setItem(STORAGE_KEYS.lastSettings, JSON.stringify(settings));
+            saveMasterSettings();
         }
 
         function hexToRgba(hex, opacityPercent) {
@@ -503,7 +545,17 @@
             });
         }
 
+        function saveTasks() {
+            if (!currentListId) return;
+            const list = lists.find((l) => l.id === currentListId);
+            if (list) {
+                list.tasks = tasks;
+                saveLists();
+            }
+        }
+
         function addTask() {
+            if (!currentListId) return;
             const newTask = {
                 id: Date.now() + Math.random(),
                 text: '',
@@ -520,6 +572,114 @@
             }
         }
 
+        function renderLists() {
+            listsList.innerHTML = '';
+            if (lists.length === 0) {
+                const p = document.createElement('p');
+                p.textContent = 'No lists yet. Create one.';
+                listsList.appendChild(p);
+                return;
+            }
+
+            lists.forEach((list) => {
+                const li = document.createElement('li');
+                li.style.display = 'flex';
+                li.style.gap = '12px';
+                li.style.alignItems = 'center';
+
+                const btn = document.createElement('button');
+                btn.type = 'button';
+                btn.className = 'settings-btn';
+                btn.textContent = list.name;
+                btn.addEventListener('click', () => openList(list.id));
+
+                const del = document.createElement('button');
+                del.type = 'button';
+                del.className = 'delete-task';
+                del.textContent = 'Delete';
+                del.setAttribute('aria-label', `Delete list ${list.name}`);
+                del.addEventListener('click', () => {
+                    const ok = confirm(`Delete list "${list.name}"? This cannot be undone.`);
+                    if (!ok) return;
+                    lists = lists.filter((l) => l.id !== list.id);
+                    saveLists();
+                    // if deleted list is currently open, close it
+                    if (currentListId === list.id) {
+                        currentListId = null;
+                        closeList();
+                    } else {
+                        renderLists();
+                    }
+                });
+
+                li.appendChild(btn);
+                li.appendChild(del);
+                listsList.appendChild(li);
+            });
+        }
+
+        function createListPrompt() {
+            const name = prompt('Enter list name');
+            if (!name) return;
+            // inherit last used settings
+            const initialSettings = { ...settings };
+            const newList = {
+                id: Date.now() + Math.random(),
+                name: name.trim(),
+                tasks: [],
+                settings: initialSettings
+            };
+            lists.push(newList);
+            saveLists();
+            openList(newList.id);
+        }
+
+        function openList(listId) {
+            const list = lists.find((l) => l.id === listId);
+            if (!list) return;
+            currentListId = listId;
+            tasks = list.tasks || [];
+            settings = { ...list.settings };
+
+            listTitle.textContent = list.name;
+            listHeader.style.display = 'flex';
+            listsContainer.style.display = 'none';
+            tasksScreen.style.display = 'block';
+            // show/hide toolbar buttons for list view
+            if (newTaskBtn) newTaskBtn.style.display = '';
+            const newListTopBtnEl = document.getElementById('newListTopBtn');
+            if (newListTopBtnEl) newListTopBtnEl.style.display = 'none';
+            applySettings();
+            renderTasks();
+        }
+
+        function closeList() {
+            if (currentListId) {
+                const list = lists.find((l) => l.id === currentListId);
+                if (list) {
+                    list.tasks = tasks;
+                    list.settings = { ...settings };
+                }
+                saveLists();
+                // update master so the lists/main view reflects the last-used settings
+                saveMasterSettings();
+            }
+            currentListId = null;
+            tasks = [];
+            settings = loadLastSettings();
+
+            listHeader.style.display = 'none';
+            listsContainer.style.display = 'block';
+            tasksScreen.style.display = 'none';
+            // show/hide toolbar buttons for lists view
+            if (newTaskBtn) newTaskBtn.style.display = 'none';
+            const newListTopBtnEl = document.getElementById('newListTopBtn');
+            if (newListTopBtnEl) newListTopBtnEl.style.display = '';
+            applySettings();
+            renderLists();
+            taskList.innerHTML = '';
+        }
+
         function openSettings() {
             populateSettingsFields();
             applyTaskCardStyles();
@@ -531,13 +691,25 @@
         }
 
         newTaskBtn.addEventListener('click', addTask);
+        if (createListBtn) createListBtn.addEventListener('click', createListPrompt);
+        const newListTopBtn = document.getElementById('newListTopBtn');
+        if (newListTopBtn) newListTopBtn.addEventListener('click', createListPrompt);
         settingsBtn.addEventListener('click', openSettings);
         closeSettingsBtn.addEventListener('click', closeSettings);
         closeSettingsXBtn.addEventListener('click', closeSettings);
+        closeListBtn.addEventListener('click', closeList);
 
         taskCardBackgroundInput.addEventListener('input', () => {
             settings.taskCardBackground = taskCardBackgroundInput.value;
-            saveSettings();
+            if (currentListId) {
+                const list = lists.find((l) => l.id === currentListId);
+                if (list) {
+                    list.settings = { ...settings };
+                    saveLists();
+                }
+            } else {
+                saveMasterSettings();
+            }
             applyTaskCardStyles();
             renderTasks();
         });
@@ -545,7 +717,15 @@
         taskCardOpacityInput.addEventListener('input', () => {
             const opacityValue = Number(taskCardOpacityInput.value);
             settings.taskCardOpacity = Number.isFinite(opacityValue) ? opacityValue : defaultSettings.taskCardOpacity;
-            saveSettings();
+            if (currentListId) {
+                const list = lists.find((l) => l.id === currentListId);
+                if (list) {
+                    list.settings = { ...settings };
+                    saveLists();
+                }
+            } else {
+                saveMasterSettings();
+            }
             applyTaskCardStyles();
             renderTasks();
         });
@@ -574,26 +754,68 @@
             const opacityValue = Number(taskCardOpacityInput.value);
             settings.taskCardOpacity = Number.isFinite(opacityValue) ? opacityValue : defaultSettings.taskCardOpacity;
 
-            saveSettings();
+            // persist settings: into current list if open, otherwise save as master settings
+            if (currentListId) {
+                const list = lists.find((l) => l.id === currentListId);
+                if (list) {
+                    list.settings = { ...settings };
+                    saveLists();
+                }
+                // also update master so new lists inherit last-closed list settings when user closes
+                saveMasterSettings();
+            } else {
+                saveMasterSettings();
+            }
+
             applySettings();
             renderTasks();
             closeSettings();
         });
 
         clearTaskListBtn.addEventListener('click', () => {
-            tasks = [];
-            settings = { ...defaultSettings };
-            localStorage.clear();
-            populateSettingsFields();
-            applySettings();
-            renderTasks();
-            closeSettings();
+            if (currentListId) {
+                // clear only current list
+                tasks = [];
+                settings = { ...defaultSettings };
+                const list = lists.find((l) => l.id === currentListId);
+                if (list) {
+                    list.tasks = tasks;
+                    list.settings = { ...settings };
+                }
+                saveLists();
+                saveLastSettings();
+                populateSettingsFields();
+                applySettings();
+                renderTasks();
+                closeSettings();
+                // after clearing a list, return to lists view so user can see New List
+                closeList();
+            } else {
+                // no list selected: clear all lists and last settings
+                lists = [];
+                saveLists();
+                settings = { ...defaultSettings };
+                saveLastSettings();
+                renderLists();
+                applySettings();
+                closeSettings();
+            }
         });
 
         removeBackgroundImageBtn.addEventListener('click', () => {
             settings.backgroundImage = '';
             backgroundImageInput.value = '';
-            saveSettings();
+            if (currentListId) {
+                const list = lists.find((l) => l.id === currentListId);
+                if (list) {
+                    list.settings = { ...settings };
+                    saveLists();
+                }
+                // update master as well so master reflects last used settings
+                saveMasterSettings();
+            } else {
+                saveMasterSettings();
+            }
             applySettings();
         });
 
@@ -606,14 +828,28 @@
             const reader = new FileReader();
             reader.onload = () => {
                 settings.backgroundImage = String(reader.result);
-                saveSettings();
+                if (currentListId) {
+                    const list = lists.find((l) => l.id === currentListId);
+                    if (list) {
+                        list.settings = { ...settings };
+                        saveLists();
+                    }
+                    saveMasterSettings();
+                } else {
+                    saveMasterSettings();
+                }
                 applySettings();
             };
             reader.readAsDataURL(file);
         });
 
+        // initial UI setup: render lists and default to the lists view
+        renderLists();
         applySettings();
-        renderTasks();
+
+        // Always start on the Lists view (so user can see available lists and New List)
+        // ensure toolbar buttons are correctly shown/hidden
+        closeList();
 
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
